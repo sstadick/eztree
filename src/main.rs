@@ -7,6 +7,7 @@ type Tree<T> = FnvHashMap<String, EzTree<T>>;
 
 struct EzTree<T: Default> {
     intervals: Vec<Interval<T>>,
+    #[cfg(feature = "nightly")]
     mask: usize,
 }
 
@@ -23,16 +24,20 @@ impl<T: Default> EzTree<T> {
         unsafe { v.set_len(n) };
 
         // Maybe nightly only
-        let mut mask = 1;
-        while mask <= n {
-            mask <<= 1;
+        #[cfg(feature = "nightly")]
+        {
+            let mut mask = 1;
+            while mask <= n {
+                mask <<= 1;
+            }
+            mask -= 1;
+            EzTree {
+                intervals: v,
+                mask: mask,
+            }
         }
-        mask -= 1;
-
-        EzTree {
-            intervals: v,
-            mask: mask,
-        }
+        #[cfg(not(feature = "nightly"))]
+        EzTree { intervals: v }
     }
 
     // Insert items from the sorted iterator `iter` into `v` in complete binary tree order.
@@ -59,7 +64,8 @@ impl<T: Default> EzTree<T> {
     }
 
     // Find the first overlap position
-    pub fn find_gte<'a>(&'a self, start: u32, stop: u32) -> Option<&'a Interval<T>> {
+    pub fn find<'a>(&'a self, start: u32, stop: u32) -> Vec<&'a Interval<T>> {
+        let mut result = vec![];
         use std::mem;
         let mut i = 0;
 
@@ -114,22 +120,25 @@ impl<T: Default> EzTree<T> {
             };
 
             // safe because i < self.intervals.len()
-            i = if !unsafe { self.intervals.get_unchecked(i) }.overlap(start, stop) {
-                2 * i + 1
+            let interval = unsafe { self.intervals.get_unchecked(i) };
+            if interval.overlap(start, stop) {
+                result.push(interval);
+                i = 2 * i + 1;
+            } else if interval.stop > start {
+                break;
             } else {
-                2 * i + 2
-            };
+                i = 2 * i + 2;
+            }
         }
 
         // we want ffs(~(i + 1))
         // since ctz(x) = ffs(x) - 1
         // we use ctz(~(i + 1)) + 1
-        let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
-        if j == 0 {
-            None
-        } else {
-            Some(unsafe { self.intervals.get_unchecked(j - 1) })
-        }
+        //let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
+        //if j != 0 {
+        //result.push(unsafe { self.intervals.get_unchecked(j - 1) });
+        //}
+        result
     }
 }
 
@@ -139,19 +148,19 @@ fn make_tree(input: &str) -> EzTree<usize> {
     let mut intervals = vec![];
     let mut counter = 0;
     for record in reader.records() {
-        let rec = record.ok().expect("Error Reading record.");
+        let rec = record.unwrap();
         let interval = Interval {
             start: rec.start() as u32,
             stop: rec.end() as u32,
             val: counter,
         };
+        counter += 1;
         intervals.push(interval);
         records.push(rec);
     }
-    EzTree {
-        intervals: intervals,
-        mask: 0,
-    }
+
+    let tree = EzTree::new(intervals);
+    tree
 }
 
 // Simple main function for intersecting two bed files
@@ -169,5 +178,7 @@ fn main() {
     let mut reader = bed::Reader::from_file(bed_2).expect("Couldn't open the input file");
     for record in reader.records() {
         let rec = record.ok().expect("Error reading record.");
+        let result = tree.find(rec.start() as u32, rec.end() as u32);
+        println!("{} overlaps for {:#?}", result.len(), rec);
     }
 }
