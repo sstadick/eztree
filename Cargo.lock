@@ -223,7 +223,15 @@ name = "eztree"
 version = "0.1.0"
 dependencies = [
  "bio",
+ "eztreelib",
  "fnv",
+ "ginterval",
+]
+
+[[package]]
+name = "eztreelib"
+version = "0.1.0"
+dependencies = [
  "ginterval",
 ]
 

@@ -1,5 +1,5 @@
 [package]
-name = "eztree"
+name = "eztreelib"
 version = "0.1.0"
 authors = ["Seth Stadick <sstadick@gmail.com>"]
 edition = "2018"
@@ -7,8 +7,4 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bio = "0.30.0"
-fnv = "1.0.3"
-ginterval = { path = "ginterval" }
-eztreelib = { path = "eztreelib" }
-
+ginterval = {path = "../ginterval"}
