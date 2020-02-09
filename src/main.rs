@@ -24,6 +24,7 @@ fn make_tree(input: &str) -> EzTree<usize> {
     }
 
     let tree = EzTree::new(intervals);
+    println!("Tree is: {:#?}", tree);
     tree
 }
 

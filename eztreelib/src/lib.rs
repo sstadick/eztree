@@ -1,8 +1,16 @@
+use eytzinger::SliceExt;
 use ginterval::Interval;
 
+#[derive(Debug)]
+pub struct Node<T: Default> {
+    interval: Interval<T>,
+    max: u32,
+}
+
+#[derive(Debug)]
 pub struct EzTree<T: Default> {
     // FIXME: make not public and fix test that relies on this
-    pub intervals: Vec<Interval<T>>,
+    pub intervals: Vec<Node<T>>,
     #[cfg(feature = "nightly")]
     mask: usize,
 }
@@ -11,13 +19,17 @@ pub struct EzTree<T: Default> {
 impl<T: Default> EzTree<T> {
     pub fn new(mut intervals: Vec<Interval<T>>) -> Self {
         intervals.sort();
-        let n = intervals.len();
-        let mut iter = intervals.into_iter();
-        let mut v = Vec::with_capacity(n);
-        Self::eytzinger_walk(&mut v, &mut iter, 0);
-
-        // it's now safe to set the length, since all `n` elements have been inserted.
-        unsafe { v.set_len(n) };
+        // TODO: Maybe pre walk it or get the index's permuations and do it backward, add max ends
+        // that way
+        intervals.eytzingerize(&mut eytzinger::permutation::InplacePermutator);
+        let mut intervals = intervals
+            .into_iter()
+            .map(|iv| Node {
+                interval: iv,
+                max: 0,
+            })
+            .collect();
+        Self::set_max(&mut intervals, 0);
 
         // Maybe nightly only
         #[cfg(feature = "nightly")]
@@ -33,7 +45,29 @@ impl<T: Default> EzTree<T> {
             }
         }
         #[cfg(not(feature = "nightly"))]
-        EzTree { intervals: v }
+        EzTree { intervals }
+    }
+
+    fn set_max(v: &mut Vec<Node<T>>, i: usize) -> Option<u32> {
+        if i >= v.len() {
+            return None;
+        }
+        let left = Self::set_max(v, 2 * i + 1);
+        let right = Self::set_max(v, 2 * i + 2);
+        let node = &mut v[i];
+        let left_right_max = match (left, right) {
+            (Some(l), Some(r)) => Some(std::cmp::max(l, r)),
+            (Some(l), None) => Some(l),
+            (None, Some(r)) => Some(r),
+            (None, None) => None,
+        };
+        let max = if let Some(l_r_max) = left_right_max {
+            std::cmp::max(l_r_max, node.interval.stop)
+        } else {
+            node.interval.stop
+        };
+        node.max = max;
+        Some(max)
     }
 
     pub fn len(&self) -> usize {
@@ -44,30 +78,10 @@ impl<T: Default> EzTree<T> {
     //
     // Requires `iter` to be a sorted iterator. Requires v's capacity to be set to the number of
     // elements in `iter`. The length of `v` will not be changed by this function.
-    fn eytzinger_walk<I>(v: &mut Vec<Interval<T>>, iter: &mut I, i: usize)
-    where
-        I: Iterator<Item = Interval<T>>,
-    {
-        if i >= v.capacity() {
-            return;
-        }
-        // visit left child
-        Self::eytzinger_walk(v, iter, 2 * i + 1);
-
-        // put data at the root
-        // we know the get_unchecked_mut and unwrap below are safe bc we set the Vec's cap to the
-        // len of te iterator.
-        *unsafe { v.get_unchecked_mut(i) } = iter.next().unwrap();
-
-        // vist right child
-        Self::eytzinger_walk(v, iter, 2 * i + 2);
-    }
-
     // Find the first overlap position
+    // TODO: See cgranges and how the stack implemenatino is used
     pub fn find<'a>(&'a self, start: u32, stop: u32) -> Vec<&'a Interval<T>> {
-        let mut result = vec![];
         use std::mem;
-        let mut i = 0;
 
         // The finiky bit
         //
@@ -76,7 +90,7 @@ impl<T: Default> EzTree<T> {
         // find at what depth a single prefetch fetches all the descendants. It turns out that, at
         // depth k under some node with index i, the leftmost child is at:
         //
-        // 2^k * i + 2^(k-1) + 2^(k-2) + ... 2^0 = s^k * i + s^k - 1
+        // 2^k * i + 2^(k-1) + 2^(k-2) + ... 2^0 = 2^k * i + 2^k - 1
         //
         // This follows from the fact that the leftmost immediate child of node i is at 2i + 1 by
         // recursivly expanding i. If your're curious the rightmost child is at:
@@ -106,7 +120,10 @@ impl<T: Default> EzTree<T> {
         let offset = multiplier + multiplier / 2;
         let _ = offset; // make nightly happy if we use it
 
-        while i < self.intervals.len() {
+        let mut stack = std::collections::VecDeque::new();
+        stack.push_back((&self.intervals[0], 0, false));
+        let mut result = vec![];
+        loop {
             #[cfg(feature = "nightly")]
             // unsafe is safe because pointer is never dereferenced
             unsafe {
@@ -119,18 +136,33 @@ impl<T: Default> EzTree<T> {
                 )
             };
 
-            // safe because i < self.intervals.len()
-            let interval = unsafe { self.intervals.get_unchecked(i) };
-            if interval.overlap(start, stop) {
-                result.push(interval);
-                i = 2 * i + 1;
-            } else if interval.stop > start {
-                break;
+            let (node, i, left_seen) = if let Some((node, i, left_seen)) = stack.pop_front() {
+                (node, i, left_seen)
             } else {
-                i = 2 * i + 2;
+                break;
+            };
+            // check if current node overlaps
+            //if node.interval.overlap(start, stop) {
+            //result.push(&node.interval);
+            //}
+            // maybe push left onto stack
+            if !left_seen {
+                stack.push_back((node, i, true));
+                if let Some(left) = self.intervals.get(2 * i + 1) {
+                    if left.max > start {
+                        stack.push_back((left, 2 * i + 1, false));
+                    }
+                }
+            } else if let Some(right) = self.intervals.get(2 * i + 2) {
+                // check if within bounds?
+                if node.interval.overlap(start, stop) {
+                    result.push(&node.interval);
+                }
+                stack.push_back((right, 2 * i + 2, false));
             }
         }
 
+        // This bit fixes the possiblity of overrunning the tree, unclear if I will need it
         // we want ffs(~(i + 1))
         // since ctz(x) = ffs(x) - 1
         // we use ctz(~(i + 1)) + 1
@@ -404,14 +436,14 @@ mod tests {
         let lapper = setup_nonoverlapping();
         let mut total = 0;
         for iv in lapper.intervals.iter() {
-            for _ in lapper.find(iv.start, iv.stop) {
+            for _ in lapper.find(iv.interval.start, iv.interval.stop) {
                 total += 1;
             }
         }
         assert_eq!(lapper.len(), total);
         total = 0;
         for iv in lapper.intervals.iter() {
-            total +=  lapper.find(iv.start, iv.stop).len();
+            total +=  lapper.find(iv.interval.start, iv.interval.stop).len();
         }
         assert_eq!(lapper.len(), total);
     }

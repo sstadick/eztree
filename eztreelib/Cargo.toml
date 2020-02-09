@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 ginterval = {path = "../ginterval"}
+eytzinger = "1.0.1"

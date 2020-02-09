@@ -219,6 +219,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
 
 [[package]]
+name = "eytzinger"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fc85822788b914005a2a5897283d9417a1b36c466d9b3a392261534aa15051b"
+
+[[package]]
 name = "eztree"
 version = "0.1.0"
 dependencies = [
@@ -232,6 +238,7 @@ dependencies = [
 name = "eztreelib"
 version = "0.1.0"
 dependencies = [
+ "eytzinger",
  "ginterval",
 ]
 
