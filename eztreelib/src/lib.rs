@@ -121,7 +121,7 @@ impl<T: Default> EzTree<T> {
         let _ = offset; // make nightly happy if we use it
 
         let mut stack = std::collections::VecDeque::new();
-        stack.push_back((&self.intervals[0], 0, false));
+        stack.push_back((&self.intervals[0], 0));
         let mut result = vec![];
         loop {
             #[cfg(feature = "nightly")]
@@ -136,30 +136,62 @@ impl<T: Default> EzTree<T> {
                 )
             };
 
-            let (node, i, left_seen) = if let Some((node, i, left_seen)) = stack.pop_front() {
-                (node, i, left_seen)
+            let (node, i) = if let Some((node, i)) = stack.pop_front() {
+                (node, i)
             } else {
                 break;
             };
+            println!("Start: {}, Stop: {}", start, stop);
+            println!(
+                "IV(start: {}, stop: {})",
+                node.interval.start, node.interval.stop
+            );
             // check if current node overlaps
+            if node.interval.overlap(start, stop) {
+                println!("Overlapped");
+                result.push(&node.interval);
+            } else if node.interval.stop > start {
+                println!("No overlap and beyond hope");
+            //break;
+            } else {
+                println!("No overlap");
+            }
+            // maybe push left onto stack
+            if let Some(left) = self.intervals.get(2 * i + 1) {
+                if left.max > start {
+                    stack.push_back((left, 2 * i + 1));
+                }
+            }
+            // maybe push right onto stack
+            if let Some(right) = self.intervals.get(2 * i + 2) {
+                // check if within bounds?
+                stack.push_back((right, 2 * i + 2));
+            }
+            // Attempt at in order
+            //let (node, i, left_seen) = if let Some((node, i, left_seen)) = stack.pop_front() {
+            //(node, i, left_seen)
+            //} else {
+            //break;
+            //};
+            //// check if current node overlaps
+            ////if node.interval.overlap(start, stop) {
+            ////result.push(&node.interval);
+            ////}
+            //// maybe push left onto stack
+            //if !left_seen {
+            //stack.push_back((node, i, true));
+            //if let Some(left) = self.intervals.get(2 * i + 1) {
+            //if left.max > start {
+            //stack.push_back((left, 2 * i + 1, false));
+            //}
+            //}
+            //} else if let Some(right) = self.intervals.get(2 * i + 2) {
+            //// check if within bounds?
             //if node.interval.overlap(start, stop) {
             //result.push(&node.interval);
             //}
-            // maybe push left onto stack
-            if !left_seen {
-                stack.push_back((node, i, true));
-                if let Some(left) = self.intervals.get(2 * i + 1) {
-                    if left.max > start {
-                        stack.push_back((left, 2 * i + 1, false));
-                    }
-                }
-            } else if let Some(right) = self.intervals.get(2 * i + 2) {
-                // check if within bounds?
-                if node.interval.overlap(start, stop) {
-                    result.push(&node.interval);
-                }
-                stack.push_back((right, 2 * i + 2, false));
-            }
+            //stack.push_back((right, 2 * i + 2, false));
+            //}
         }
 
         // This bit fixes the possiblity of overrunning the tree, unclear if I will need it
