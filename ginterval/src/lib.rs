@@ -3,13 +3,13 @@ use std::cmp::Ordering::{self};
 /// Represent a range from [start, stop)
 /// Inclusive start, exclusive of stop
 #[derive(Debug)]
-pub struct Interval<T: Default> {
+pub struct Interval<T: Default + std::fmt::Debug> {
     pub start: u32,
     pub stop: u32,
     pub val: T,
 }
 
-impl<T: Default> Interval<T> {
+impl<T: Default + std::fmt::Debug> Interval<T> {
     #[inline]
     pub fn new(start: u32, stop: u32, val: T) -> Self {
         Interval { start, stop, val }
@@ -59,7 +59,7 @@ impl<T: Default> Interval<T> {
     }
 }
 
-impl<T: Default> Ord for Interval<T> {
+impl<T: Default + std::fmt::Debug> Ord for Interval<T> {
     #[inline]
     fn cmp(&self, other: &Interval<T>) -> Ordering {
         if self.start < other.start {
@@ -71,16 +71,16 @@ impl<T: Default> Ord for Interval<T> {
         }
     }
 }
-impl<T: Default> Eq for Interval<T> {}
+impl<T: Default + std::fmt::Debug> Eq for Interval<T> {}
 
-impl<T: Default> PartialOrd for Interval<T> {
+impl<T: Default + std::fmt::Debug> PartialOrd for Interval<T> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(&other))
     }
 }
 
-impl<T: Default> PartialEq for Interval<T> {
+impl<T: Default + std::fmt::Debug> PartialEq for Interval<T> {
     #[inline]
     fn eq(&self, other: &Interval<T>) -> bool {
         self.start == other.start && self.stop == other.stop

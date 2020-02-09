@@ -1,22 +1,35 @@
+#![feature(core_intrinsics)]
 use eytzinger::SliceExt;
 use ginterval::Interval;
 
 #[derive(Debug)]
-pub struct Node<T: Default> {
+pub struct Node<T: Default + std::fmt::Debug> {
     interval: Interval<T>,
     max: u32,
 }
 
 #[derive(Debug)]
-pub struct EzTree<T: Default> {
+pub struct EzTree<T: Default + std::fmt::Debug> {
     // FIXME: make not public and fix test that relies on this
     pub intervals: Vec<Node<T>>,
     #[cfg(feature = "nightly")]
     mask: usize,
+    #[cfg(feature = "nightly")]
+    offset: usize,
+    #[cfg(feature = "nightly")]
+    multiplier: usize,
+}
+
+#[derive(Debug)]
+struct StackCell<'a, T: Default + std::fmt::Debug> {
+    node: &'a Node<T>,
+    left_checked: bool,
+    index: usize,
+    //tree_level: usize,
 }
 
 // Heavily based off of https://github.com/jonhoo/ordsearch/blob/master/src/lib.rs
-impl<T: Default> EzTree<T> {
+impl<T: Default + std::fmt::Debug> EzTree<T> {
     pub fn new(mut intervals: Vec<Interval<T>>) -> Self {
         intervals.sort();
         // TODO: Maybe pre walk it or get the index's permuations and do it backward, add max ends
@@ -34,14 +47,19 @@ impl<T: Default> EzTree<T> {
         // Maybe nightly only
         #[cfg(feature = "nightly")]
         {
+            use std::mem;
+            let multiplier = 64 / mem::size_of::<Interval<T>>();
+            let offset = multiplier + multiplier / 2;
             let mut mask = 1;
-            while mask <= n {
+            while mask <= intervals.len() {
                 mask <<= 1;
             }
             mask -= 1;
             EzTree {
-                intervals: v,
+                intervals,
                 mask: mask,
+                offset: offset,
+                multiplier: multiplier,
             }
         }
         #[cfg(not(feature = "nightly"))]
@@ -81,8 +99,6 @@ impl<T: Default> EzTree<T> {
     // Find the first overlap position
     // TODO: See cgranges and how the stack implemenatino is used
     pub fn find<'a>(&'a self, start: u32, stop: u32) -> Vec<&'a Interval<T>> {
-        use std::mem;
-
         // The finiky bit
         //
         // We want to prefetch a couple of levels down in the tree from where we are. However, we
@@ -105,7 +121,6 @@ impl<T: Default> EzTree<T> {
         //
         // But we don't actually *need* k, we only ever use 2^k. So, we can just use
         // 64/sizeof(Interval<T>) directly! We call this the multiplier.
-        let multiplier = 64 / mem::size_of::<Interval<T>>();
         // now for those additions we had to do above. Well, we know that the offset is really just
         // 2^k = 1, and we know that multiplier == 2^k, so we're done right? Well sort of. The
         // prefetch instruction fetches the cacheline that *holds* the given memory address. Let's
@@ -117,91 +132,64 @@ impl<T: Default> EzTree<T> {
         // a cacheline with any of the other items at that level! That's not great. So, instead, we
         // prefetch the address that is half-way through the set of children. That way, we ensure
         // that we prefetch at least half of the items.
-        let offset = multiplier + multiplier / 2;
-        let _ = offset; // make nightly happy if we use it
 
         let mut stack = std::collections::VecDeque::new();
-        stack.push_back((&self.intervals[0], 0));
+        stack.push_back(StackCell {
+            node: &self.intervals[0],
+            index: 0,
+            //tree_level: 0,
+            left_checked: false,
+        });
         let mut result = vec![];
-        loop {
+        while let Some(mut stack_cell) = stack.pop_front() {
             #[cfg(feature = "nightly")]
             // unsafe is safe because pointer is never dereferenced
             unsafe {
                 use std::intrinsics::prefetch_read_data;
                 prefetch_read_data(
-                    self.items
+                    self.intervals
                         .as_ptr()
-                        .offset(((multiplier * i + offset) & self.mask) as isize),
+                        .offset((self.multiplier * stack_cell.index + self.offset) as isize),
                     3,
                 )
             };
-
-            let (node, i) = if let Some((node, i)) = stack.pop_front() {
-                (node, i)
+            // if left child not processed
+            if !stack_cell.left_checked {
+                let left_idx = 2 * stack_cell.index + 1;
+                let left = self.intervals.get(2 * stack_cell.index + 1);
+                // put current cell back on the stack
+                stack_cell.left_checked = true;
+                stack.push_back(stack_cell);
+                // push left child if it exists and has chance of overlap
+                if let Some(left) = left {
+                    if left.max > start {
+                        stack.push_back(StackCell {
+                            node: left,
+                            index: left_idx,
+                            left_checked: false,
+                        });
+                    }
+                }
+            } else if let Some(right) = self.intervals.get(2 * stack_cell.index + 2) {
+                // maybe push right onto stack
+                if stack_cell.node.interval.start < stop {
+                    // check if current node overlaps
+                    if start < stack_cell.node.interval.stop {
+                        //if node.interval.overlap(start, stop) {
+                        result.push(&stack_cell.node.interval);
+                    }
+                    stack.push_back(StackCell {
+                        node: right,
+                        index: 2 * stack_cell.index + 2,
+                        left_checked: false,
+                    });
+                }
             } else {
-                break;
-            };
-            println!("Start: {}, Stop: {}", start, stop);
-            println!(
-                "IV(start: {}, stop: {})",
-                node.interval.start, node.interval.stop
-            );
-            // check if current node overlaps
-            if node.interval.overlap(start, stop) {
-                println!("Overlapped");
-                result.push(&node.interval);
-            } else if node.interval.stop > start {
-                println!("No overlap and beyond hope");
-            //break;
-            } else {
-                println!("No overlap");
-            }
-            // maybe push left onto stack
-            if let Some(left) = self.intervals.get(2 * i + 1) {
-                if left.max > start {
-                    stack.push_back((left, 2 * i + 1));
+                if stack_cell.node.interval.overlap(start, stop) {
+                    result.push(&stack_cell.node.interval);
                 }
             }
-            // maybe push right onto stack
-            if let Some(right) = self.intervals.get(2 * i + 2) {
-                // check if within bounds?
-                stack.push_back((right, 2 * i + 2));
-            }
-            // Attempt at in order
-            //let (node, i, left_seen) = if let Some((node, i, left_seen)) = stack.pop_front() {
-            //(node, i, left_seen)
-            //} else {
-            //break;
-            //};
-            //// check if current node overlaps
-            ////if node.interval.overlap(start, stop) {
-            ////result.push(&node.interval);
-            ////}
-            //// maybe push left onto stack
-            //if !left_seen {
-            //stack.push_back((node, i, true));
-            //if let Some(left) = self.intervals.get(2 * i + 1) {
-            //if left.max > start {
-            //stack.push_back((left, 2 * i + 1, false));
-            //}
-            //}
-            //} else if let Some(right) = self.intervals.get(2 * i + 2) {
-            //// check if within bounds?
-            //if node.interval.overlap(start, stop) {
-            //result.push(&node.interval);
-            //}
-            //stack.push_back((right, 2 * i + 2, false));
-            //}
         }
-
-        // This bit fixes the possiblity of overrunning the tree, unclear if I will need it
-        // we want ffs(~(i + 1))
-        // since ctz(x) = ffs(x) - 1
-        // we use ctz(~(i + 1)) + 1
-        //let j = (i + 1) >> ((!(i + 1)).trailing_zeros() + 1);
-        //if j != 0 {
-        //result.push(unsafe { self.intervals.get_unchecked(j - 1) });
-        //}
         result
     }
 }
@@ -345,7 +333,9 @@ mod tests {
             stop: 25,
             val: 0,
         };
-        assert_eq!(vec![&e1, &e2], lapper.find(8, 20));
+        let mut found = lapper.find(8, 20);
+        found.sort();
+        assert_eq!(vec![&e1, &e2], found);
     }
 
     //#[test]
@@ -405,13 +395,15 @@ mod tests {
             Iv{start: 150, stop: 200, val: 0},
         ];
         let lapper = Lapper::new(data1);
-        let found2 = lapper.find(8, 11);
+        let mut found2 = lapper.find(8, 11);
+        found2.sort();
         assert_eq!(found2, vec![
             &Iv{start: 1, stop: 10, val: 0}, 
             &Iv{start: 9, stop: 11, val: 0},
             &Iv{start: 10, stop: 13, val: 0},
         ]);
-        let found2 = lapper.find(145, 151);
+        let mut found2 = lapper.find(145, 151);
+        found2.sort();
         assert_eq!(found2, vec![
             &Iv{start: 100, stop: 200, val: 0},
             &Iv{start: 111, stop: 160, val: 0},
